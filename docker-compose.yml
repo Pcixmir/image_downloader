@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  photo-downloader:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: photo-downloader-service
+    environment:
+      # NATS Configuration
+      - NATS_URL=nats://nats:4222
+      
+      # S3 Configuration
+      - S3_ENDPOINT_URL=http://minio:9000
+      - S3_ACCESS_KEY_ID=minioadmin
+      - S3_SECRET_ACCESS_KEY=minioadmin
+      - S3_BUCKET_NAME=photos
+      - S3_REGION=us-east-1
+      
+      # Photo Processing
+      - MAX_FILE_SIZE_MB=10
+      - DOWNLOAD_TIMEOUT_SECONDS=30
+      
+      # Logging
+      - LOG_LEVEL=INFO
+    depends_on:
+      - nats
+      - minio
+    networks:
+      - photo-downloader-network
+    restart: unless-stopped
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: nats-server
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: ["-js", "-m", "8222"]
+    networks:
+      - photo-downloader-network
+    restart: unless-stopped
+
+  minio:
+    image: minio/minio:latest
+    container_name: minio-server
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    networks:
+      - photo-downloader-network
+    restart: unless-stopped
+
+  # Создание bucket при старте
+  minio-setup:
+    image: minio/mc:latest
+    container_name: minio-setup
+    depends_on:
+      - minio
+    entrypoint: >
+      /bin/sh -c "
+      sleep 5;
+      /usr/bin/mc alias set myminio http://minio:9000 minioadmin minioadmin;
+      /usr/bin/mc mb myminio/photos --ignore-existing;
+      /usr/bin/mc policy set public myminio/photos;
+      exit 0;
+      "
+    networks:
+      - photo-downloader-network
+
+volumes:
+  minio_data:
+
+networks:
+  photo-downloader-network:
+    driver: bridge 
