@@ -13,7 +13,7 @@ class PhotoUploadRequest(BaseModel):
     file_id: List[str] = Field(description="Список ID файлов")
     s3_key: List[str] = Field(description="Список ключей S3 для сохранения")
     bot_id: int = Field(description="ID бота")
-    chat_id: int = Field(description="ID чата")
+    user_id: int = Field(description="ID пользователя")
     job_id: int = Field(description="ID задачи")
     
     @field_validator('s3_key')
@@ -31,7 +31,7 @@ class PhotoUploadResult(BaseModel):
     s3_key: List[str] = Field(description="Список ключей S3")
     s3_url: List[str] = Field(description="Список URL загруженных файлов")
     bot_id: int = Field(description="ID бота")
-    chat_id: int = Field(description="ID чата")
+    user_id: int = Field(description="ID пользователя")
     job_id: int = Field(description="ID задачи")
     message: str = Field(default="Photos uploaded successfully")
 
@@ -52,7 +52,7 @@ class PhotoUploadError(BaseModel):
     header: Literal["inf", "train"] = Field(description="Тип операции")
     file_id: List[str] = Field(description="Список файлов, которые не удалось загрузить")
     bot_id: int = Field(description="ID бота")
-    chat_id: int = Field(description="ID чата")
+    user_id: int = Field(description="ID пользователя")
     job_id: int = Field(description="ID задачи")
     error: str = Field(description="Описание ошибки")
     error_code: str = Field(description="Код ошибки")

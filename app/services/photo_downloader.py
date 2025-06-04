@@ -34,7 +34,7 @@ class PhotoDownloader:
                 header=request.header,
                 file_id=request.file_id,
                 bot_id=request.bot_id,
-                chat_id=request.chat_id,
+                user_id=request.user_id,
                 job_id=request.job_id,
                 error=error_msg,
                 error_code="VALIDATION_ERROR",
@@ -71,7 +71,7 @@ class PhotoDownloader:
                 header=request.header,
                 file_id=failed_files,
                 bot_id=request.bot_id,
-                chat_id=request.chat_id,
+                user_id=request.user_id,
                 job_id=request.job_id,
                 error=f"Failed to process {len(failed_files)} files",
                 error_code="PROCESSING_ERROR",
@@ -84,14 +84,14 @@ class PhotoDownloader:
                 s3_key=successful_keys,
                 s3_url=successful_urls,
                 bot_id=request.bot_id,
-                chat_id=request.chat_id,
+                user_id=request.user_id,
                 job_id=request.job_id,
                 message=f"Successfully uploaded {len(successful_files)} photos"
             )
     
     def _build_s3_path(self, request: PhotoUploadRequest, s3_key: str) -> str:
         """Формирование полного пути в S3"""
-        return f"uploads/{request.header}/{request.bot_id}/{request.chat_id}/{request.job_id}/{s3_key}"
+        return f"uploads/{request.header}/{request.bot_id}/{request.user_id}/{request.job_id}/{s3_key}"
     
     async def _download_and_upload_photo(self, file_id: str, s3_key: str, request: PhotoUploadRequest) -> str:
         """
@@ -125,7 +125,7 @@ class PhotoDownloader:
             # Формируем метаданные
             metadata = {
                 'bot_id': str(request.bot_id),
-                'chat_id': str(request.chat_id),
+                'user_id': str(request.user_id),
                 'job_id': str(request.job_id),
                 'file_id': file_id,
                 'header': request.header

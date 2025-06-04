@@ -13,9 +13,30 @@ from app.services.photo_downloader import photo_downloader
 
 # Инициализация брокера NATS
 broker = NatsBroker(settings.nats_url)
-app = FastStream(broker)
 
 logger = get_logger()
+
+
+@asynccontextmanager
+async def lifespan(app: FastStream):
+    """Управление жизненным циклом приложения"""
+    # Startup
+    logger.info("Photo Downloader Service starting up...")
+    
+    # Проверяем подключение к S3
+    from app.services.s3_service import s3_service
+    if not s3_service.check_bucket_exists():
+        logger.warning(f"S3 bucket '{settings.s3_bucket_name}' does not exist or is not accessible")
+    else:
+        logger.info(f"S3 bucket '{settings.s3_bucket_name}' is accessible")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Photo Downloader Service shutting down...")
+
+
+app = FastStream(broker, lifespan=lifespan)
 
 
 @broker.subscriber("photo_upload")
@@ -54,7 +75,7 @@ async def handle_photo_upload(
             header=request.header,
             file_id=request.file_id,
             bot_id=request.bot_id,
-            chat_id=request.chat_id,
+            user_id=request.user_id,
             job_id=request.job_id,
             error=str(e),
             error_code="INTERNAL_ERROR",
@@ -62,25 +83,6 @@ async def handle_photo_upload(
         )
         await broker.publish(error_result, "photo_upload_error")
         return error_result
-
-
-@app.on_startup
-async def startup():
-    """Инициализация при запуске приложения"""
-    logger.info("Photo Downloader Service starting up...")
-    
-    # Проверяем подключение к S3
-    from app.services.s3_service import s3_service
-    if not s3_service.check_bucket_exists():
-        logger.warning(f"S3 bucket '{settings.s3_bucket_name}' does not exist or is not accessible")
-    else:
-        logger.info(f"S3 bucket '{settings.s3_bucket_name}' is accessible")
-
-
-@app.on_shutdown
-async def shutdown():
-    """Очистка при завершении приложения"""
-    logger.info("Photo Downloader Service shutting down...")
 
 
 if __name__ == "__main__":

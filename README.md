@@ -22,13 +22,13 @@ HTTP Client → NATS Gateway → NATS → Photo Downloader → S3
 uploads/
 ├── inf/                    # Inference операции
 │   └── {bot_id}/
-│       └── {chat_id}/
+│       └── {user_id}/
 │           └── {job_id}/
 │               ├── photo1.jpg
 │               └── photo2.jpg
 └── train/                  # Training операции
     └── {bot_id}/
-        └── {chat_id}/
+        └── {user_id}/
             └── {job_id}/
                 ├── photo1.jpg
                 └── photo2.jpg
@@ -116,7 +116,7 @@ make compose-up
   "file_id": ["photo1", "photo2"],    // Список ID файлов
   "s3_key": ["path1.jpg", "path2.jpg"], // Список ключей S3
   "bot_id": 12345,                    // ID бота
-  "chat_id": 67890,                   // ID чата
+  "user_id": 67890,                   // ID пользователя
   "job_id": 123                       // ID задачи
 }
 ```
@@ -133,7 +133,7 @@ make compose-up
   "s3_key": ["uploads/inf/12345/67890/123/path1.jpg"],
   "s3_url": ["https://bucket.s3.amazonaws.com/uploads/inf/12345/67890/123/path1.jpg"],
   "bot_id": 12345,
-  "chat_id": 67890,
+  "user_id": 67890,
   "job_id": 123,
   "message": "Successfully uploaded 2 photos"
 }
@@ -147,7 +147,7 @@ make compose-up
   "header": "inf",
   "file_id": ["photo1"],
   "bot_id": 12345,
-  "chat_id": 67890,
+  "user_id": 67890,
   "job_id": 123,
   "error": "File size exceeds maximum",
   "error_code": "VALIDATION_ERROR"

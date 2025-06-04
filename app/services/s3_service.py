@@ -47,14 +47,24 @@ class S3Service:
         
         return self._client
     
-    def generate_s3_key(self, chat_id: int, photo_id: Optional[str] = None, 
+    def generate_s3_key(self, user_id: int, photo_id: Optional[str] = None, 
                        file_extension: str = ".jpg") -> str:
-        """Генерирует уникальный ключ для файла в S3"""
+        """
+        Генерирует уникальный ключ для S3
+        
+        Args:
+            user_id: ID пользователя
+            photo_id: ID фотографии (опционально)
+            file_extension: Расширение файла
+            
+        Returns:
+            Уникальный ключ для S3
+        """
         if not photo_id:
             photo_id = str(uuid.uuid4())
         
-        timestamp = datetime.now().strftime("%Y/%m/%d")
-        return f"photos/{chat_id}/{timestamp}/{photo_id}{file_extension}"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return f"photos/{user_id}/{timestamp}/{photo_id}{file_extension}"
     
     async def upload_file(
         self, 
