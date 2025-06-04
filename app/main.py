@@ -1,13 +1,19 @@
 import asyncio
 from contextlib import asynccontextmanager
-from threading import Thread
+from typing import Union
 
 from faststream import FastStream
 from faststream.nats import NatsBroker
 
 from app.settings.settings import settings
-from app.utils.logger import get_logger, get_logger_aggregator
-from app.schemas.schemas import PhotoUploadRequest, PhotoUploadResult, PhotoUploadError
+from app.utils.logger import get_logger
+from app.schemas.schemas import (
+    PhotoUploadRequest, 
+    PhotoUploadResult, 
+    PhotoUploadError,
+    InferencePhotoRequest,
+    InferencePhotoResult
+)
 from app.services.photo_downloader import photo_downloader
 
 
@@ -39,52 +45,101 @@ async def lifespan(app: FastStream):
 app = FastStream(broker, lifespan=lifespan)
 
 
-@broker.subscriber("photo_upload")
+@broker.subscriber("photo_upload_train")
 @broker.publisher("photo_upload_result")
 @broker.publisher("photo_upload_error")
-async def handle_photo_upload(
+async def handle_batch_training_photos(
     request: PhotoUploadRequest,
-) -> PhotoUploadResult | PhotoUploadError:
+) -> Union[PhotoUploadResult, PhotoUploadError]:
     """
-    Обработчик сообщений для загрузки фотографий
+    Обработчик для batch загрузки фотографий для тренировки
     
     Args:
-        request: Запрос на загрузку фотографий
+        request: Запрос на batch загрузку фотографий для тренировки
         
     Returns:
-        Результат обработки или ошибка
+        Результат обработки batch или ошибка
     """
-    logger.info(f"Received photo upload request: {request.job_id}")
+    logger.info(f"Received training batch upload request: job_id={request.job_id}, batch_size={len(request.photos)}")
     
     try:
-        # Обрабатываем фотографии
+        # Обрабатываем batch фотографий
         result = await photo_downloader.process_photos(request)
         
         if isinstance(result, PhotoUploadError):
-            logger.error(f"Photo upload failed for job_id {request.job_id}: {result.error}")
+            logger.error(f"Training batch upload failed for job_id {request.job_id}: {result.error}")
             await broker.publish(result, "photo_upload_error")
         else:
-            logger.info(f"Photo upload successful for job_id {request.job_id}")
+            logger.info(f"Training batch upload successful for job_id {request.job_id}: "
+                       f"{result.successful_files}/{result.total_files} files uploaded "
+                       f"in {result.processing_time:.2f}s")
             await broker.publish(result, "photo_upload_result")
         
         return result
         
     except Exception as e:
-        logger.error(f"Unexpected error processing photo upload: {e}")
+        logger.error(f"Unexpected error processing training batch upload: {e}")
+        
         error_result = PhotoUploadError(
             header=request.header,
-            file_id=request.file_id,
+            bot_id=request.bot_id,
+            user_id=request.user_id,
+            job_id=request.job_id,
+            batch_id=request.batch_id,
+            error=str(e),
+            error_code="INTERNAL_ERROR",
+            failed_files=[photo.file_id for photo in request.photos]
+        )
+        await broker.publish(error_result, "photo_upload_error")
+        return error_result
+
+
+@broker.subscriber("photo_upload_inf")
+@broker.publisher("inference_result")
+@broker.publisher("photo_upload_error")
+async def handle_inference_photo(
+    request: InferencePhotoRequest,
+) -> Union[InferencePhotoResult, PhotoUploadError]:
+    """
+    Обработчик для загрузки одиночного фото для inference
+    
+    Args:
+        request: Запрос на загрузку одного фото для inference
+        
+    Returns:
+        Результат обработки фото или ошибка
+    """
+    logger.info(f"Received inference photo upload request: job_id={request.job_id}, file_id={request.photo.file_id}")
+    
+    try:
+        # Обрабатываем одно фото
+        result = await photo_downloader.process_photos(request)
+        
+        if isinstance(result, PhotoUploadError):
+            logger.error(f"Inference photo upload failed for job_id {request.job_id}: {result.error}")
+            await broker.publish(result, "photo_upload_error")
+        else:
+            logger.info(f"Inference photo upload successful for job_id {request.job_id} "
+                       f"in {result.processing_time:.2f}s")
+            await broker.publish(result, "inference_result")
+        
+        return result
+        
+    except Exception as e:
+        logger.error(f"Unexpected error processing inference photo upload: {e}")
+        
+        error_result = PhotoUploadError(
+            header=request.header,
             bot_id=request.bot_id,
             user_id=request.user_id,
             job_id=request.job_id,
             error=str(e),
             error_code="INTERNAL_ERROR",
-            failed_files=request.file_id
+            failed_files=[request.photo.file_id]
         )
         await broker.publish(error_result, "photo_upload_error")
         return error_result
 
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    asyncio.run(app.run()) 

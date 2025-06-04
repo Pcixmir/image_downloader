@@ -1,38 +1,88 @@
-# Photo Downloader Service
+# 📸 Photo Downloader Service
 
-Микросервис для загрузки фотографий в S3 через NATS.
+Микросервис для загрузки фотографий из **Telegram** в **S3** через **NATS** очереди сообщений.
+
+## 🎯 Основные возможности
+
+- **Telegram интеграция**: Скачивание файлов по `file_id` через Telegram Bot API
+- **Batch обработка**: До 100 фотографий параллельно для тренировки
+- **Одиночные фото**: Быстрая обработка для inference
+- **S3 загрузка**: Автоматическая организация файлов по структуре
+- **NATS messaging**: Асинхронная обработка через очереди
+- **Мониторинг**: Детальная статистика и логирование
+
+## 🔄 Архитектура
+
+```
+Telegram Bot → NATS Topics → Photo Downloader → S3 Storage
+     ↓              ↓              ↓              ↓
+  file_id    photo_upload_*   Download &     Organized
+             messages         Process        Structure
+```
+
+### Процесс обработки:
+
+1. **Получение `file_id`** из Telegram сообщения
+2. **Отправка в NATS** topic (`photo_upload_train` или `photo_upload_inf`)
+3. **Получение URL** файла через Telegram Bot API (`getFile`)
+4. **Скачивание** файла по полученному URL
+5. **Загрузка в S3** с метаданными и правильной структурой
+6. **Отправка результата** обратно в NATS
+
+### NATS Topics Flow:
 
 ## 📋 Описание
 
 Photo Downloader Service - это микросервис, который:
-- Получает сообщения из NATS по теме `photo_upload`
+- **Для тренировки (train)**: Получает batch сообщения и обрабатывает множественные фотографии параллельно
+- **Для inference (inf)**: Получает запросы на загрузку одиночных фотографий
 - Скачивает фотографии по предоставленным file_id
-- Загружает их в S3 с организованной структурой папок
+- Загружает их в S3 с разной структурой для train/inference
+- Предоставляет детальную статистику обработки
 - Отправляет результаты обратно в NATS
+
+## 🚀 Ключевые возможности
+
+### ✨ Разделение по типам операций:
+- **Train операции**: Batch обработка до 100 фотографий параллельно
+- **Inference операции**: Быстрая загрузка одиночных фотографий
+- **Параллельная обработка**: До 5 файлов одновременно для batch (настраивается)
+- **Автогенерация S3 ключей**: Если `s3_key` пустой, генерируется уникальный ключ на основе `user_id`, `file_id` и временной метки
+- **Детальная статистика**: Индивидуальная информация о каждом файле
+- **Обработка ошибок**: Индивидуальные ошибки для каждого файла
 
 ## 🏗️ Архитектура
 
 ```
 HTTP Client → NATS Gateway → NATS → Photo Downloader → S3
+                                ↓      
+                          ┌─────────────┐
+                          │ photo_upload_train │  → Batch Processing (до 100 фото)
+                          │ photo_upload_inf   │  → Single Photo (1 фото)
+                          └─────────────┘
 ```
 
 ### Структура S3
 
 ```
-uploads/
-├── inf/                    # Inference операции
-│   └── {bot_id}/
-│       └── {user_id}/
-│           └── {job_id}/
-│               ├── photo1.jpg
-│               └── photo2.jpg
-└── train/                  # Training операции
-    └── {bot_id}/
-        └── {user_id}/
-            └── {job_id}/
-                ├── photo1.jpg
-                └── photo2.jpg
+bucket-name/
+├── {bot_id}/                       # Тренировочные данные (train)
+│   └── {user_id}/
+│       └── {job_id}/
+│           ├── photo1.jpg
+│           ├── photo2.jpg
+│           └── photo3.jpg
+└── uploads/                        # Inference данные (inf)
+    └── inf/
+        └── {bot_id}/
+            └── {user_id}/
+                └── {job_id}/
+                    └── photo.jpg    # Одиночные фото без batch_id
 ```
+
+**Важно:** 
+- **Train** (`header: "train"`): Batch фотографии → `{bot_id}/{user_id}/{job_id}/`
+- **Inference** (`header: "inf"`): Одиночные фото → `uploads/inf/{bot_id}/{user_id}/{job_id}/`
 
 ## 🚀 Быстрый старт
 
@@ -92,6 +142,8 @@ make compose-up
 | Переменная | Описание | По умолчанию |
 |------------|----------|--------------|
 | `NATS_URL` | URL NATS сервера | `nats://localhost:4222` |
+| `TELEGRAM_BOT_TOKEN` | Токен Telegram бота | - |
+| `TELEGRAM_API_URL` | URL Telegram Bot API | `https://api.telegram.org` |
 | `S3_ENDPOINT_URL` | URL S3 endpoint | - |
 | `S3_ACCESS_KEY_ID` | S3 Access Key | - |
 | `S3_SECRET_ACCESS_KEY` | S3 Secret Key | - |
@@ -99,6 +151,9 @@ make compose-up
 | `S3_REGION` | S3 регион | `us-east-1` |
 | `MAX_FILE_SIZE_MB` | Максимальный размер файла (MB) | `10` |
 | `DOWNLOAD_TIMEOUT_SECONDS` | Таймаут загрузки (сек) | `30` |
+| `MAX_CONCURRENT_DOWNLOADS` | Макс. параллельных загрузок | `5` |
+| `MAX_BATCH_SIZE` | Макс. размер batch (train) | `100` |
+| `BATCH_PROCESSING_TIMEOUT` | Таймаут обработки batch (сек) | `300` |
 | `LOG_LEVEL` | Уровень логирования | `INFO` |
 
 ## 📡 API
@@ -107,51 +162,189 @@ make compose-up
 
 #### Входящие сообщения
 
-**Topic:** `photo_upload`
+**Topic:** `photo_upload_train` - Batch обработка для тренировки
 
 **Схема:** `PhotoUploadRequest`
 ```json
 {
-  "header": "inf",                    // "inf" | "train"
-  "file_id": ["photo1", "photo2"],    // Список ID файлов
-  "s3_key": ["path1.jpg", "path2.jpg"], // Список ключей S3
-  "bot_id": 12345,                    // ID бота
-  "user_id": 67890,                   // ID пользователя
-  "job_id": 123                       // ID задачи
+  "header": "train",
+  "photos": [
+    {
+      "file_id": "BAADBAADrwADBREAAWn4gALvKoNaAg",
+      "s3_key": "",
+      "original_filename": "vacation_photo.jpg",
+      "file_size": 1024000
+    },
+    {
+      "file_id": "BAADBAADsAADBREAAQoJBgAB7ioNaAg", 
+      "s3_key": "custom_name.jpg",
+      "original_filename": "sunset.jpg",
+      "file_size": 2048000
+    }
+  ],
+  "bot_id": 12345,
+  "user_id": 67890,
+  "job_id": "job_abc123",
+  "batch_id": "batch_xyz789",
+  "priority": 5
+}
+```
+
+> **Примечание:** Поле `s3_key` может быть пустым (`""`) - в этом случае ключ будет сгенерирован автоматически на основе `user_id`, `file_id` и временной метки в формате `photos/{user_id}/{timestamp}/{file_id}.{ext}`.
+
+**Topic:** `photo_upload_inf` - Одиночное фото для inference
+
+**Схема:** `InferencePhotoRequest`
+```json
+{
+  "header": "inf",
+  "photo": {
+    "file_id": "BAADBAADrwADBREAAWn4gALvKoNaAg",
+    "s3_key": "",
+    "original_filename": "inference_photo.jpg",
+    "file_size": 1024000
+  },
+  "bot_id": 12345,
+  "user_id": 67890,
+  "job_id": "job_abc123",
+  "priority": 5
 }
 ```
 
 #### Исходящие сообщения
 
-**Topic:** `photo_upload_result` (успех)
+**Topic:** `photo_upload_result` - Результат batch обработки (train)
 
 **Схема:** `PhotoUploadResult`
 ```json
 {
-  "header": "inf",
-  "file_id": ["photo1", "photo2"],
-  "s3_key": ["uploads/inf/12345/67890/123/path1.jpg"],
-  "s3_url": ["https://bucket.s3.amazonaws.com/uploads/inf/12345/67890/123/path1.jpg"],
+  "header": "train",
   "bot_id": 12345,
   "user_id": 67890,
-  "job_id": 123,
-  "message": "Successfully uploaded 2 photos"
+  "job_id": "job_abc123",
+  "batch_id": "batch_xyz789",
+  "total_files": 2,
+  "successful_files": 2,
+  "failed_files": 0,
+  "successful_uploads": [
+    {
+      "file_id": "BAADBAADrwADBREAAWn4gALvKoNaAg",
+      "s3_key": "12345/67890/job_abc123/photo1.jpg",
+      "s3_url": "https://bucket.s3.amazonaws.com/12345/67890/job_abc123/photo1.jpg",
+      "original_filename": "vacation_photo.jpg",
+      "file_size": 1024000,
+      "upload_time": 2.5,
+      "content_type": "image/jpeg"
+    }
+  ],
+  "failed_uploads": [],
+  "processing_time": 5.2,
+  "total_size": 3072000,
+  "message": "Batch processing completed: 2/2 files successful",
+  "timestamp": "2024-01-15T10:30:00Z"
 }
 ```
 
-**Topic:** `photo_upload_error` (ошибка)
+**Topic:** `inference_result` - Результат одиночного фото (inference)
+
+**Схема:** `InferencePhotoResult`
+```json
+{
+  "header": "inf",
+  "bot_id": 12345,
+  "user_id": 67890,
+  "job_id": "job_abc123",
+  "upload_result": {
+    "file_id": "BAADBAADrwADBREAAWn4gALvKoNaAg",
+    "s3_key": "uploads/inf/12345/67890/job_abc123/photo.jpg",
+    "s3_url": "https://bucket.s3.amazonaws.com/uploads/inf/12345/67890/job_abc123/photo.jpg",
+    "original_filename": "inference_photo.jpg",
+    "file_size": 1024000,
+    "upload_time": 2.1,
+    "content_type": "image/jpeg"
+  },
+  "processing_time": 2.1,
+  "message": "Photo uploaded successfully",
+  "timestamp": "2024-01-15T10:30:00Z"
+}
+```
+
+**Topic:** `photo_upload_error` - Ошибки
 
 **Схема:** `PhotoUploadError`
 ```json
 {
   "header": "inf",
-  "file_id": ["photo1"],
   "bot_id": 12345,
   "user_id": 67890,
-  "job_id": 123,
-  "error": "File size exceeds maximum",
-  "error_code": "VALIDATION_ERROR"
+  "job_id": "job_abc123",
+  "error": "File size exceeds maximum limit",
+  "error_code": "FILE_TOO_LARGE",
+  "failed_files": ["BAADBAADrwADBREAAWn4gALvKoNaAg"],
+  "timestamp": "2024-01-15T10:30:00Z"
 }
+```
+
+## 🔧 Коды ошибок
+
+| Код ошибки | Описание |
+|------------|----------|
+| `BATCH_VALIDATION_ERROR` | Ошибка валидации batch (train) |
+| `INFERENCE_PROCESSING_ERROR` | Ошибка обработки inference фото |
+| `TELEGRAM_API_ERROR` | Ошибка при обращении к Telegram Bot API |
+| `INVALID_TELEGRAM_URL` | Некорректный URL от Telegram API |
+| `FILE_TOO_LARGE` | Размер файла превышает лимит |
+| `DOWNLOAD_HTTP_ERROR` | HTTP ошибка при скачивании |
+| `DOWNLOAD_TIMEOUT` | Таймаут при скачивании |
+| `S3_UPLOAD_ERROR` | Ошибка загрузки в S3 |
+| `UNEXPECTED_ERROR` | Неожиданная ошибка |
+| `INTERNAL_ERROR` | Внутренняя ошибка сервиса |
+
+## 🛠️ Использование
+
+### Train операции (Batch)
+
+```bash
+# Отправка batch для тренировки (с автогенерацией s3_key)
+nats pub photo_upload_train '{
+  "header": "train",
+  "photos": [
+    {"file_id": "photo1_url", "s3_key": "", "original_filename": "image1.jpg"},
+    {"file_id": "photo2_url", "s3_key": "", "original_filename": "image2.png"}
+  ],
+  "bot_id": 12345,
+  "user_id": 67890,
+  "job_id": "train_job_123"
+}'
+
+# Отправка batch с кастомными s3_key
+nats pub photo_upload_train '{
+  "header": "train",
+  "photos": [
+    {"file_id": "photo1_url", "s3_key": "custom1.jpg"},
+    {"file_id": "photo2_url", "s3_key": "custom2.jpg"}
+  ],
+  "bot_id": 12345,
+  "user_id": 67890,
+  "job_id": "train_job_123"
+}'
+```
+
+### Inference операции (Одиночные фото)
+
+```bash
+# Отправка одного фото для inference (с автогенерацией s3_key)
+nats pub photo_upload_inf '{
+  "header": "inf",
+  "photo": {
+    "file_id": "photo_url",
+    "s3_key": "",
+    "original_filename": "inference.jpg"
+  },
+  "bot_id": 12345,
+  "user_id": 67890,
+  "job_id": "inf_job_123"
+}'
 ```
 
 ## 🛠️ Разработка
@@ -250,18 +443,31 @@ make compose-down
 ```python
 from app.utils.logger import logger
 
-logger.info("Processing photo upload", extra={
+# Train operations
+logger.info("Processing training batch", extra={
     "job_id": request.job_id,
-    "file_count": len(request.file_id)
+    "batch_size": len(request.photos)
+})
+
+# Inference operations  
+logger.info("Processing inference photo", extra={
+    "job_id": request.job_id,
+    "file_id": request.photo.file_id
 })
 ```
 
 ### Метрики
 
-- Количество обработанных файлов
-- Время загрузки
-- Ошибки загрузки
-- Размеры файлов
+#### Train операции:
+- Количество batch
+- Размер batch (количество фото)
+- Время обработки batch
+- Успешные/неудачные файлы в batch
+
+#### Inference операции:
+- Количество одиночных фото
+- Время загрузки каждого фото
+- Успешные/неудачные загрузки
 
 ## 🔧 Устранение неполадок
 
@@ -273,48 +479,14 @@ logger.info("Processing photo upload", extra={
    Убедитесь, что NATS сервер запущен
    ```
 
-2. **Ошибка доступа к S3**
+2. **Неправильная структура S3**
    ```
-   Проверьте S3 credentials в .env
-   Убедитесь, что bucket существует
-   Проверьте права доступа
-   ```
-
-3. **Превышение размера файла**
-   ```
-   Увеличьте MAX_FILE_SIZE_MB в настройках
-   Проверьте размер загружаемых файлов
+   Train: {bot_id}/{user_id}/{job_id}/filename.jpg
+   Inference: uploads/inf/{bot_id}/{user_id}/{job_id}/filename.jpg
    ```
 
-### Логи
-
-```bash
-# Docker логи
-make docker-logs
-
-# docker-compose логи
-make compose-logs
-
-# Локальные логи
-tail -f logs/photo-downloader.log
-```
-
-## 🤝 Вклад в проект
-
-1. Форкните репозиторий
-2. Создайте feature ветку (`git checkout -b feature/amazing-feature`)
-3. Зафиксируйте изменения (`git commit -m 'Add amazing feature'`)
-4. Отправьте в ветку (`git push origin feature/amazing-feature`)
-5. Откройте Pull Request
-
-## 📄 Лицензия
-
-Этот проект лицензирован под MIT License - см. файл [LICENSE](LICENSE) для деталей.
-
-## 📞 Поддержка
-
-Если у вас есть вопросы или проблемы:
-
-1. Проверьте [Issues](../../issues)
-2. Создайте новый Issue с подробным описанием
-3. Обратитесь к команде разработки 
+3. **Проблемы с типами операций**
+   ```
+   Используйте photo_upload_train для batch (train)
+   Используйте photo_upload_inf для одиночных фото (inf)
+   ```

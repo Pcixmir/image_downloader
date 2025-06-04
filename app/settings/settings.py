@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     # NATS Configuration
     nats_url: str = Field(default="nats://localhost:4222", description="NATS server URL")
     
+    # Telegram Bot Configuration
+    telegram_bot_token: str = Field(description="Telegram Bot Token")
+    telegram_api_url: str = Field(default="https://api.telegram.org", description="Telegram API base URL")
+    
     # S3 Configuration
     s3_endpoint_url: str = Field(default="", description="S3 endpoint URL")
     s3_access_key_id: str = Field(description="S3 access key ID")
@@ -19,6 +23,11 @@ class Settings(BaseSettings):
     max_file_size_mb: int = Field(default=10, description="Maximum file size in MB")
     download_timeout_seconds: int = Field(default=30, description="Download timeout in seconds")
     
+    # Batch Processing
+    max_concurrent_downloads: int = Field(default=5, description="Maximum concurrent downloads per batch")
+    max_batch_size: int = Field(default=100, description="Maximum number of files per batch")
+    batch_processing_timeout: int = Field(default=300, description="Batch processing timeout in seconds")
+    
     # Logging
     log_level: str = Field(default="INFO", description="Log level")
     
@@ -27,4 +36,5 @@ class Settings(BaseSettings):
         env_file_encoding = "utf-8"
 
 
+# Глобальный экземпляр настроек
 settings = Settings() 
