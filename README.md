@@ -47,6 +47,7 @@ Photo Downloader Service - это микросервис, который:
 - **Train операции**: Batch обработка до 100 фотографий параллельно
 - **Inference операции**: Быстрая загрузка одиночных фотографий
 - **Параллельная обработка**: До 5 файлов одновременно для batch (настраивается)
+- **Валидация изображений**: Проверка минимальных размеров (450x450px) только для train операций
 - **Автогенерация S3 ключей**: Если `s3_key` пустой, генерируется уникальный ключ на основе `user_id`, `file_id` и временной метки
 - **Детальная статистика**: Индивидуальная информация о каждом файле
 - **Обработка ошибок**: Индивидуальные ошибки для каждого файла
@@ -68,7 +69,7 @@ HTTP Client → NATS Gateway → NATS → Photo Downloader → S3
 bucket-name/
 ├── {bot_id}/                       # Тренировочные данные (train)
 │   └── {user_id}/
-│       └── {job_id}/
+│       └── {avatar_id}/
 │           ├── photo1.jpg
 │           ├── photo2.jpg
 │           └── photo3.jpg
@@ -76,13 +77,13 @@ bucket-name/
     └── inf/
         └── {bot_id}/
             └── {user_id}/
-                └── {job_id}/
+                └── {avatar_id}/
                     └── photo.jpg    # Одиночные фото без batch_id
 ```
 
 **Важно:** 
-- **Train** (`header: "train"`): Batch фотографии → `{bot_id}/{user_id}/{job_id}/`
-- **Inference** (`header: "inf"`): Одиночные фото → `uploads/inf/{bot_id}/{user_id}/{job_id}/`
+- **Train** (`header: "train"`): Batch фотографии → `{bot_id}/{user_id}/{avatar_id}/`
+- **Inference** (`header: "inf"`): Одиночные фото → `uploads/inf/{bot_id}/{user_id}/{avatar_id}/`
 
 ## 🚀 Быстрый старт
 
@@ -150,6 +151,8 @@ make compose-up
 | `S3_BUCKET_NAME` | Имя S3 bucket | - |
 | `S3_REGION` | S3 регион | `us-east-1` |
 | `MAX_FILE_SIZE_MB` | Максимальный размер файла (MB) | `10` |
+| `MIN_FILE_SIZE_KB` | Минимальный размер файла (KB) | `80` |
+| `MIN_IMAGE_DIMENSION` | Минимальная сторона изображения (px) | `450` |
 | `DOWNLOAD_TIMEOUT_SECONDS` | Таймаут загрузки (сек) | `30` |
 | `MAX_CONCURRENT_DOWNLOADS` | Макс. параллельных загрузок | `5` |
 | `MAX_BATCH_SIZE` | Макс. размер batch (train) | `100` |
@@ -171,20 +174,36 @@ make compose-up
   "photos": [
     {
       "file_id": "BAADBAADrwADBREAAWn4gALvKoNaAg",
-      "s3_key": "",
-      "original_filename": "vacation_photo.jpg",
-      "file_size": 1024000
+      "properties":{
+        "s3_key": "",
+        "file_size": 1024000,
+        "width": 1920,
+        "height": 1280,
+        "face_diagoanl": 360,
+        "bboxs": "box list",
+        "num_face": 1,
+      },
+      "status": "ok/error",
+      "reason": "NO_FACE/BAD_QUALITY/FACE_TOO_SMALL"
     },
     {
-      "file_id": "BAADBAADsAADBREAAQoJBgAB7ioNaAg", 
-      "s3_key": "custom_name.jpg",
-      "original_filename": "sunset.jpg",
-      "file_size": 2048000
+      "file_id": "BAADBAADsAADBREAAQoJBgAB7ioNaAg",
+      "properties":{
+        "s3_key": "",
+        "file_size": 1024000,
+        "width": 1920,
+        "height": 1280,
+        "face_diagoanl": 360,
+        "bboxs": "box list",
+        "num_face": 1,
+      },
+      "status": "ok/error",
+      "error_details": "NO_FACE/BAD_QUALITY/FACE_TOO_SMALL" 
     }
   ],
   "bot_id": 12345,
   "user_id": 67890,
-  "job_id": "job_abc123",
+  "avatar_id": "avatar_abc123",
   "batch_id": "batch_xyz789",
   "priority": 5
 }
@@ -201,12 +220,11 @@ make compose-up
   "photo": {
     "file_id": "BAADBAADrwADBREAAWn4gALvKoNaAg",
     "s3_key": "",
-    "original_filename": "inference_photo.jpg",
     "file_size": 1024000
   },
   "bot_id": 12345,
   "user_id": 67890,
-  "job_id": "job_abc123",
+  "avatar_id": "avatar_abc123",
   "priority": 5
 }
 ```
@@ -221,7 +239,7 @@ make compose-up
   "header": "train",
   "bot_id": 12345,
   "user_id": 67890,
-  "job_id": "job_abc123",
+  "avatar_id": "avatar_abc123",
   "batch_id": "batch_xyz789",
   "total_files": 2,
   "successful_files": 2,
@@ -229,9 +247,8 @@ make compose-up
   "successful_uploads": [
     {
       "file_id": "BAADBAADrwADBREAAWn4gALvKoNaAg",
-      "s3_key": "12345/67890/job_abc123/photo1.jpg",
-      "s3_url": "https://bucket.s3.amazonaws.com/12345/67890/job_abc123/photo1.jpg",
-      "original_filename": "vacation_photo.jpg",
+      "s3_key": "12345/67890/avatar_abc123/photo1.jpg",
+      "s3_url": "https://bucket.s3.amazonaws.com/12345/67890/avatar_abc123/photo1.jpg",
       "file_size": 1024000,
       "upload_time": 2.5,
       "content_type": "image/jpeg"
@@ -253,12 +270,11 @@ make compose-up
   "header": "inf",
   "bot_id": 12345,
   "user_id": 67890,
-  "job_id": "job_abc123",
+  "avatar_id": "avatar_abc123",
   "upload_result": {
     "file_id": "BAADBAADrwADBREAAWn4gALvKoNaAg",
-    "s3_key": "uploads/inf/12345/67890/job_abc123/photo.jpg",
-    "s3_url": "https://bucket.s3.amazonaws.com/uploads/inf/12345/67890/job_abc123/photo.jpg",
-    "original_filename": "inference_photo.jpg",
+    "s3_key": "uploads/inf/12345/67890/avatar_abc123/photo.jpg",
+    "s3_url": "https://bucket.s3.amazonaws.com/uploads/inf/12345/67890/avatar_abc123/photo.jpg",
     "file_size": 1024000,
     "upload_time": 2.1,
     "content_type": "image/jpeg"
@@ -277,7 +293,7 @@ make compose-up
   "header": "inf",
   "bot_id": 12345,
   "user_id": 67890,
-  "job_id": "job_abc123",
+  "avatar_id": "avatar_abc123",
   "error": "File size exceeds maximum limit",
   "error_code": "FILE_TOO_LARGE",
   "failed_files": ["BAADBAADrwADBREAAWn4gALvKoNaAg"],
@@ -294,6 +310,8 @@ make compose-up
 | `TELEGRAM_API_ERROR` | Ошибка при обращении к Telegram Bot API |
 | `INVALID_TELEGRAM_URL` | Некорректный URL от Telegram API |
 | `FILE_TOO_LARGE` | Размер файла превышает лимит |
+| `FILE_TOO_SMALL` | Размер файла меньше минимального |
+| `IMAGE_TOO_SMALL` | Размеры изображения меньше минимальных (450x450px) - только для train |
 | `DOWNLOAD_HTTP_ERROR` | HTTP ошибка при скачивании |
 | `DOWNLOAD_TIMEOUT` | Таймаут при скачивании |
 | `S3_UPLOAD_ERROR` | Ошибка загрузки в S3 |
@@ -309,12 +327,12 @@ make compose-up
 nats pub photo_upload_train '{
   "header": "train",
   "photos": [
-    {"file_id": "photo1_url", "s3_key": "", "original_filename": "image1.jpg"},
-    {"file_id": "photo2_url", "s3_key": "", "original_filename": "image2.png"}
+    {"file_id": "photo1_url", "s3_key": ""},
+    {"file_id": "photo2_url", "s3_key": ""}
   ],
   "bot_id": 12345,
   "user_id": 67890,
-  "job_id": "train_job_123"
+  "avatar_id": "train_avatar_123"
 }'
 
 # Отправка batch с кастомными s3_key
@@ -326,7 +344,7 @@ nats pub photo_upload_train '{
   ],
   "bot_id": 12345,
   "user_id": 67890,
-  "job_id": "train_job_123"
+  "avatar_id": "train_avatar_123"
 }'
 ```
 
@@ -338,12 +356,11 @@ nats pub photo_upload_inf '{
   "header": "inf",
   "photo": {
     "file_id": "photo_url",
-    "s3_key": "",
-    "original_filename": "inference.jpg"
+    "s3_key": ""
   },
   "bot_id": 12345,
   "user_id": 67890,
-  "job_id": "inf_job_123"
+  "avatar_id": "inf_avatar_123"
 }'
 ```
 
@@ -445,13 +462,13 @@ from app.utils.logger import logger
 
 # Train operations
 logger.info("Processing training batch", extra={
-    "job_id": request.job_id,
+    "avatar_id": request.avatar_id,
     "batch_size": len(request.photos)
 })
 
 # Inference operations  
 logger.info("Processing inference photo", extra={
-    "job_id": request.job_id,
+    "avatar_id": request.avatar_id,
     "file_id": request.photo.file_id
 })
 ```
@@ -481,8 +498,8 @@ logger.info("Processing inference photo", extra={
 
 2. **Неправильная структура S3**
    ```
-   Train: {bot_id}/{user_id}/{job_id}/filename.jpg
-   Inference: uploads/inf/{bot_id}/{user_id}/{job_id}/filename.jpg
+   Train: {bot_id}/{user_id}/{avatar_id}/filename.jpg
+   Inference: uploads/inf/{bot_id}/{user_id}/{avatar_id}/filename.jpg
    ```
 
 3. **Проблемы с типами операций**

@@ -4,6 +4,8 @@ import os
 import time
 from typing import List, Tuple, Union
 from urllib.parse import urlparse
+from PIL import Image
+from io import BytesIO
 from app.schemas.schemas import (
     PhotoUploadRequest, 
     PhotoUploadResult, 
@@ -26,9 +28,14 @@ class PhotoDownloader:
     
     def __init__(self):
         self.max_file_size = settings.max_file_size_mb * 1024 * 1024  # Конвертируем в байты
+        self.min_file_size = settings.min_file_size_kb * 1024  # Конвертируем в байты
         self.timeout = settings.download_timeout_seconds
         self.max_concurrent_downloads = getattr(settings, 'max_concurrent_downloads', 5)
         self.max_batch_size = getattr(settings, 'max_batch_size', 100)
+        self.min_image_dimension = settings.min_image_dimension  # Минимальная сторона изображения в пикселях
+        
+        # Глобальный семафор для ограничения параллельных загрузок
+        self.semaphore = asyncio.Semaphore(self.max_concurrent_downloads)
         
         # Поддерживаемые типы изображений
         self.supported_content_types = {
@@ -105,6 +112,35 @@ class PhotoDownloader:
         except Exception:
             return False
     
+    def _validate_image_dimensions(self, image_content: bytes) -> Tuple[bool, str, int, int]:
+        """
+        Проверка размеров изображения
+        
+        Args:
+            image_content: Содержимое изображения в байтах
+            
+        Returns:
+            Tuple[bool, str, int, int]: (is_valid, error_message, width, height)
+        """
+        try:
+            # Открываем изображение из байтов
+            with Image.open(BytesIO(image_content)) as img:
+                width, height = img.size
+                
+                # Проверяем минимальные размеры
+                if width < self.min_image_dimension or height < self.min_image_dimension:
+                    error_msg = (f"Image dimensions {width}x{height} do not meet minimum requirement "
+                               f"of {self.min_image_dimension}px for both width and height")
+                    return False, error_msg, width, height
+                
+                logger.debug(f"Image dimensions validated: {width}x{height}")
+                return True, "", width, height
+                
+        except Exception as e:
+            error_msg = f"Corrupted or invalid image file: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg, 0, 0
+    
     def _generate_error_s3_key(self, photo: PhotoFile, request: Union[PhotoUploadRequest, InferencePhotoRequest]) -> str:
         """Генерация s3_key для ошибок (вынесено в отдельный метод для избежания дублирования)"""
         if photo.s3_key and photo.s3_key.strip():
@@ -121,7 +157,7 @@ class PhotoDownloader:
         start_time: float
     ) -> Union[InferencePhotoResult, PhotoUploadError]:
         """Обработка одиночного фото для inference"""
-        logger.info(f"Processing single inference photo for job_id: {request.job_id}")
+        logger.info(f"Processing single inference photo for avatar_id: {request.avatar_id}")
         
         try:
             # Обрабатываем одно фото
@@ -130,23 +166,23 @@ class PhotoDownloader:
             processing_time = time.time() - start_time
             
             if isinstance(result, FileUploadError):
-                logger.error(f"Inference photo upload failed for job_id {request.job_id}: {result.error_message}")
+                logger.error(f"Inference photo upload failed for avatar_id {request.avatar_id}: {result.error_message}")
                 return PhotoUploadError(
                     header=request.header,
                     bot_id=request.bot_id,
                     user_id=request.user_id,
-                    job_id=request.job_id,
+                    avatar_id=request.avatar_id,
                     error=result.error_message,
                     error_code=result.error_code,
                     failed_files=[request.photo.file_id]
                 )
             else:
-                logger.info(f"Inference photo upload successful for job_id {request.job_id} in {processing_time:.2f}s")
+                logger.info(f"Inference photo upload successful for avatar_id {request.avatar_id} in {processing_time:.2f}s")
                 return InferencePhotoResult(
                     header=request.header,
                     bot_id=request.bot_id,
                     user_id=request.user_id,
-                    job_id=request.job_id,
+                    avatar_id=request.avatar_id,
                     upload_result=result,
                     processing_time=processing_time,
                     message="Photo uploaded successfully"
@@ -154,13 +190,13 @@ class PhotoDownloader:
                 
         except Exception as e:
             processing_time = time.time() - start_time
-            logger.error(f"Critical error processing inference photo for job_id {request.job_id}: {e}")
+            logger.error(f"Critical error processing inference photo for avatar_id {request.avatar_id}: {e}")
             
             return PhotoUploadError(
                 header=request.header,
                 bot_id=request.bot_id,
                 user_id=request.user_id,
-                job_id=request.job_id,
+                avatar_id=request.avatar_id,
                 error=str(e),
                 error_code="INFERENCE_PROCESSING_ERROR",
                 failed_files=[request.photo.file_id]
@@ -172,7 +208,7 @@ class PhotoDownloader:
         start_time: float
     ) -> Union[PhotoUploadResult, PhotoUploadError]:
         """Обработка batch фотографий для тренировки"""
-        logger.info(f"Processing batch training photos for job_id: {request.job_id}, batch_size: {len(request.photos)}")
+        logger.info(f"Processing batch training photos for avatar_id: {request.avatar_id}, batch_size: {len(request.photos)}")
         
         try:
             # Валидация batch
@@ -183,13 +219,10 @@ class PhotoDownloader:
             failed_uploads = []
             total_size = 0
             
-            # Создаем семафор для ограничения параллельных загрузок
-            semaphore = asyncio.Semaphore(self.max_concurrent_downloads)
-            
             # Запускаем параллельную обработку
             tasks = []
             for photo in request.photos:
-                task = self._process_single_photo(photo, request, semaphore)
+                task = self._process_single_photo(photo, request, self.semaphore)
                 tasks.append(task)
             
             # Ждем завершения всех задач
@@ -213,7 +246,7 @@ class PhotoDownloader:
             
             processing_time = time.time() - start_time
             
-            logger.info(f"Batch processing completed for job_id: {request.job_id}. "
+            logger.info(f"Batch processing completed for avatar_id: {request.avatar_id}. "
                        f"Success: {len(successful_uploads)}, Failed: {len(failed_uploads)}, "
                        f"Time: {processing_time:.2f}s")
             
@@ -221,7 +254,7 @@ class PhotoDownloader:
                 header=request.header,
                 bot_id=request.bot_id,
                 user_id=request.user_id,
-                job_id=request.job_id,
+                avatar_id=request.avatar_id,
                 batch_id=request.batch_id,
                 total_files=len(request.photos),
                 successful_files=len(successful_uploads),
@@ -235,13 +268,13 @@ class PhotoDownloader:
             
         except Exception as e:
             processing_time = time.time() - start_time
-            logger.error(f"Critical error processing batch for job_id {request.job_id}: {e}")
+            logger.error(f"Critical error processing batch for avatar_id {request.avatar_id}: {e}")
             
             return PhotoUploadError(
                 header=request.header,
                 bot_id=request.bot_id,
                 user_id=request.user_id,
-                job_id=request.job_id,
+                avatar_id=request.avatar_id,
                 batch_id=request.batch_id,
                 error=str(e),
                 error_code="BATCH_PROCESSING_ERROR",
@@ -286,12 +319,8 @@ class PhotoDownloader:
             # Генерируем s3_key если он пустой
             s3_key = photo.s3_key
             if not s3_key or s3_key.strip() == "":
-                # Определяем расширение файла из original_filename или используем .jpg по умолчанию
-                file_extension = ".jpg"  # По умолчанию
-                if photo.original_filename:
-                    _, ext = os.path.splitext(photo.original_filename)
-                    if ext:
-                        file_extension = ext.lower()
+                # Используем .jpg по умолчанию
+                file_extension = ".jpg"
                 
                 s3_key = s3_service.generate_s3_key(
                     user_id=request.user_id,
@@ -340,21 +369,66 @@ class PhotoDownloader:
                         error_code="FILE_TOO_LARGE"
                     )
                 
+                # Проверяем минимальный размер файла
+                if content_length < self.min_file_size:
+                    return FileUploadError(
+                        file_id=photo.file_id,
+                        s3_key=full_s3_key,
+                        error_message=f"File size {content_length} is below minimum {self.min_file_size}",
+                        error_code="FILE_TOO_SMALL"
+                    )
+                
                 # Определяем и валидируем content type
                 content_type = response.headers.get('content-type', 'image/jpeg')
                 if content_type not in self.supported_content_types:
-                    logger.warning(f"Unsupported content type {content_type} for file {photo.file_id}, using image/jpeg")
-                    content_type = 'image/jpeg'
+                    logger.error(f"Unsupported content type {content_type} for file {photo.file_id}")
+                    return FileUploadError(
+                        file_id=photo.file_id,
+                        s3_key=full_s3_key,
+                        error_message=f"Unsupported file format: {content_type}",
+                        error_code="UNSUPPORTED_FORMAT"
+                    )
+                
+                # Проверяем размеры изображения только для train операций
+                width, height = 0, 0  # Значения по умолчанию
+                if request.header == "train":
+                    is_valid, dimension_error, width, height = self._validate_image_dimensions(response.content)
+                    if not is_valid:
+                        # Определяем тип ошибки по сообщению
+                        if "Corrupted or invalid image file" in dimension_error:
+                            error_code = "CORRUPTED_FILE"
+                        else:
+                            error_code = "IMAGE_TOO_SMALL"
+                        
+                        logger.warning(f"Image validation failed for train photo {photo.file_id}: {dimension_error}")
+                        return FileUploadError(
+                            file_id=photo.file_id,
+                            s3_key=full_s3_key,
+                            error_message=dimension_error,
+                            error_code=error_code
+                        )
+                    
+                    logger.debug(f"Train image {photo.file_id} passed dimension validation: {width}x{height}")
+                else:
+                    # Для inference операций получаем размеры без валидации (для метаданных)
+                    try:
+                        with Image.open(BytesIO(response.content)) as img:
+                            width, height = img.size
+                        logger.debug(f"Inference image {photo.file_id} dimensions: {width}x{height} (no validation)")
+                    except Exception as e:
+                        logger.warning(f"Could not read dimensions for inference image {photo.file_id}: {e}")
+                        width, height = 0, 0
                 
                 # Формируем метаданные
                 metadata = {
                     'bot_id': str(request.bot_id),
                     'user_id': str(request.user_id),
-                    'job_id': str(request.job_id),
+                    'avatar_id': str(request.avatar_id),
                     'file_id': photo.file_id,
                     'header': request.header,
-                    'original_filename': photo.original_filename or '',
-                    'processing_time': str(time.time() - start_time)
+                    'processing_time': str(time.time() - start_time),
+                    'image_width': str(width),
+                    'image_height': str(height)
                 }
                 
                 # Добавляем batch_id только для batch запросов
@@ -377,10 +451,11 @@ class PhotoDownloader:
                     file_id=photo.file_id,
                     s3_key=full_s3_key,
                     s3_url=file_url,
-                    original_filename=photo.original_filename,
                     file_size=content_length,
                     upload_time=upload_time,
-                    content_type=content_type
+                    content_type=content_type,
+                    width=width,
+                    height=height
                 )
                 
         except httpx.HTTPStatusError as e:
@@ -414,11 +489,11 @@ class PhotoDownloader:
     def _build_s3_path(self, request: Union[PhotoUploadRequest, InferencePhotoRequest], s3_key: str) -> str:
         """Формирование полного пути в S3"""
         if request.header == "train":
-            # Для тренировки: bot_id->user_id->job_id
-            return f"{request.bot_id}/{request.user_id}/{request.job_id}/{s3_key}"
+            # Для тренировки: bot_id->user_id->avatar_id
+            return f"{request.bot_id}/{request.user_id}/{request.avatar_id}/{s3_key}"
         else:
-            # Для inference: uploads/inf/bot_id/user_id/job_id (без batch_id для одиночных фото)
-            return f"uploads/{request.header}/{request.bot_id}/{request.user_id}/{request.job_id}/{s3_key}"
+            # Для inference: uploads/inf/bot_id/user_id/avatar_id (без batch_id для одиночных фото)
+            return f"uploads/{request.header}/{request.bot_id}/{request.user_id}/{request.avatar_id}/{s3_key}"
 
 
 # Глобальный экземпляр сервиса

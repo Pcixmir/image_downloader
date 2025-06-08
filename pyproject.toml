@@ -13,6 +13,7 @@ boto3 = "^1.34.0"
 httpx = "^0.27.0"
 pydantic = "^2.5.0"
 pydantic-settings = "^2.1.0"
+pillow = "^10.0.0"
 personix-logger = {git = "https://elPrimo6@github.com/elPrimo6/personix-logger.git", tag = "v0.1.13"}
 
 [tool.poetry.group.dev.dependencies]
