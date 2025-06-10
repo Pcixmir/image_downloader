@@ -88,24 +88,39 @@ class PhotoUploadRequest(BaseModel):
     def data(self) -> PayloadData:
         """Удобный доступ к данным"""
         return self.payload['data']
-
-
-# Для обратной совместимости - legacy схемы (можно удалить позже)
-class LegacyPhotoFile(BaseModel):
-    """Информация об одном файле фотографии (legacy)"""
-    file_id: str = Field(description="ID файла в Telegram")
-    s3_key: Optional[str] = Field(default="", description="Ключ для сохранения в S3")
-    file_size: Optional[int] = Field(default=None, description="Размер файла в байтах")
-
-
-class InferencePhotoRequest(BaseModel):
-    """Запрос на inference одного фото (legacy - для совместимости)"""
-    header: Literal["inf"] = Field(description="Тип операции: inf")
-    photo: LegacyPhotoFile = Field(description="Фото для inference")
-    bot_id: int = Field(description="ID бота")
-    user_id: int = Field(description="ID пользователя")
-    avatar_id: str = Field(description="ID аватара")
-    priority: Optional[int] = Field(default=0, description="Приоритет обработки (0-10)")
+    
+    @property
+    def photos(self) -> List[PhotoFile]:
+        """Конвертация report в photos для совместимости с photo_downloader"""
+        photos = []
+        for report_item in self.data.report:
+            photo = PhotoFile(
+                file_id=report_item.file_id,
+                s3_key="",  # Будет сгенерирован автоматически
+            )
+            photos.append(photo)
+        return photos
+    
+    @property
+    def header(self) -> str:
+        """Определение типа операции на основе subject"""
+        return "train"  # Всегда train для batch операций
+    
+    @property
+    def bot_id(self) -> int:
+        return self.data.bot_id
+    
+    @property
+    def user_id(self) -> int:
+        return self.data.user_id
+    
+    @property
+    def avatar_id(self) -> str:
+        return str(self.data.avatar_id)
+    
+    @property
+    def batch_id(self) -> str:
+        return str(self.data.batch_id)
 
 
 # Результирующие схемы остаются прежними для совместимости
@@ -154,25 +169,9 @@ class PhotoUploadResult(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now)
 
 
-class InferencePhotoResult(BaseModel):
-    """Результат успешной загрузки одного фото для inference"""
-    header: Literal["inf"] = Field(description="Тип операции")
-    bot_id: int = Field(description="ID бота")
-    user_id: int = Field(description="ID пользователя")
-    avatar_id: str = Field(description="ID аватара")
-    
-    # Детали загруженного файла
-    upload_result: FileUploadResult = Field(description="Детали загрузки")
-    
-    # Общая информация
-    processing_time: float = Field(description="Время обработки в секундах")
-    message: str = Field(default="Photo uploaded successfully")
-    timestamp: datetime = Field(default_factory=datetime.now)
-
-
 class PhotoUploadError(BaseModel):
     """Критическая ошибка при обработке"""
-    header: Literal["train", "inf"] = Field(description="Тип операции")
+    header: Literal["train"] = Field(description="Тип операции")
     bot_id: int = Field(description="ID бота")
     user_id: int = Field(description="ID пользователя")
     avatar_id: str = Field(description="ID аватара")

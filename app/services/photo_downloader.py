@@ -10,8 +10,6 @@ from app.schemas.schemas import (
     PhotoUploadRequest, 
     PhotoUploadResult, 
     PhotoUploadError,
-    InferencePhotoRequest,
-    InferencePhotoResult,
     FileUploadResult,
     FileUploadError,
     PhotoFile
@@ -24,7 +22,7 @@ logger = get_logger()
 
 
 class PhotoDownloader:
-    """Сервис для загрузки фотографий в S3: batch для train, одиночных для inference"""
+    """Сервис для загрузки фотографий в S3: batch для train"""
     
     def __init__(self):
         self.max_file_size = settings.max_file_size_mb * 1024 * 1024  # Конвертируем в байты
@@ -45,27 +43,20 @@ class PhotoDownloader:
     
     async def process_photos(
         self, 
-        request: Union[PhotoUploadRequest, InferencePhotoRequest]
-    ) -> Union[PhotoUploadResult, InferencePhotoResult, PhotoUploadError]:
+        request: PhotoUploadRequest
+    ) -> Union[PhotoUploadResult, PhotoUploadError]:
         """
         Обработка запроса на загрузку фотографий
         
         Args:
-            request: Запрос с данными о фотографиях (batch для train или одиночный для inf)
+            request: Запрос с данными о фотографиях для batch тренировки
             
         Returns:
             Результат обработки или критическая ошибка
         """
         start_time = time.time()
         
-        # Определяем тип запроса
-        if isinstance(request, InferencePhotoRequest):
-            return await self._process_single_inference(request, start_time)
-        elif isinstance(request, PhotoUploadRequest):
-            return await self._process_batch_training(request, start_time)
-        else:
-            # Runtime safety: этот блок не должен выполняться при правильной типизации
-            raise ValueError(f"Unsupported request type: {type(request)}")
+        return await self._process_batch_training(request, start_time)
     
     async def _get_telegram_file_url(self, file_id: str) -> str:
         """
@@ -141,7 +132,7 @@ class PhotoDownloader:
             logger.error(error_msg)
             return False, error_msg, 0, 0
     
-    def _generate_error_s3_key(self, photo: PhotoFile, request: Union[PhotoUploadRequest, InferencePhotoRequest]) -> str:
+    def _generate_error_s3_key(self, photo: PhotoFile, request: PhotoUploadRequest) -> str:
         """Генерация s3_key для ошибок (вынесено в отдельный метод для избежания дублирования)"""
         if photo.s3_key and photo.s3_key.strip():
             return photo.s3_key
@@ -150,57 +141,6 @@ class PhotoDownloader:
             user_id=request.user_id,
             photo_id=photo.file_id
         )
-    
-    async def _process_single_inference(
-        self, 
-        request: InferencePhotoRequest, 
-        start_time: float
-    ) -> Union[InferencePhotoResult, PhotoUploadError]:
-        """Обработка одиночного фото для inference"""
-        logger.info(f"Processing single inference photo for avatar_id: {request.avatar_id}")
-        
-        try:
-            # Обрабатываем одно фото
-            result = await self._download_and_upload_photo(request.photo, request)
-            
-            processing_time = time.time() - start_time
-            
-            if isinstance(result, FileUploadError):
-                logger.error(f"Inference photo upload failed for avatar_id {request.avatar_id}: {result.error_message}")
-                return PhotoUploadError(
-                    header=request.header,
-                    bot_id=request.bot_id,
-                    user_id=request.user_id,
-                    avatar_id=request.avatar_id,
-                    error=result.error_message,
-                    error_code=result.error_code,
-                    failed_files=[request.photo.file_id]
-                )
-            else:
-                logger.info(f"Inference photo upload successful for avatar_id {request.avatar_id} in {processing_time:.2f}s")
-                return InferencePhotoResult(
-                    header=request.header,
-                    bot_id=request.bot_id,
-                    user_id=request.user_id,
-                    avatar_id=request.avatar_id,
-                    upload_result=result,
-                    processing_time=processing_time,
-                    message="Photo uploaded successfully"
-                )
-                
-        except Exception as e:
-            processing_time = time.time() - start_time
-            logger.error(f"Critical error processing inference photo for avatar_id {request.avatar_id}: {e}")
-            
-            return PhotoUploadError(
-                header=request.header,
-                bot_id=request.bot_id,
-                user_id=request.user_id,
-                avatar_id=request.avatar_id,
-                error=str(e),
-                error_code="INFERENCE_PROCESSING_ERROR",
-                failed_files=[request.photo.file_id]
-            )
     
     async def _process_batch_training(
         self, 
@@ -306,7 +246,7 @@ class PhotoDownloader:
     async def _download_and_upload_photo(
         self, 
         photo: PhotoFile, 
-        request: Union[PhotoUploadRequest, InferencePhotoRequest]
+        request: PhotoUploadRequest
     ) -> Union[FileUploadResult, FileUploadError]:
         """
         Скачивание и загрузка одной фотографии
@@ -389,35 +329,25 @@ class PhotoDownloader:
                         error_code="UNSUPPORTED_FORMAT"
                     )
                 
-                # Проверяем размеры изображения только для train операций
-                width, height = 0, 0  # Значения по умолчанию
-                if request.header == "train":
-                    is_valid, dimension_error, width, height = self._validate_image_dimensions(response.content)
-                    if not is_valid:
-                        # Определяем тип ошибки по сообщению
-                        if "Corrupted or invalid image file" in dimension_error:
-                            error_code = "CORRUPTED_FILE"
-                        else:
-                            error_code = "IMAGE_TOO_SMALL"
-                        
-                        logger.warning(f"Image validation failed for train photo {photo.file_id}: {dimension_error}")
-                        return FileUploadError(
-                            file_id=photo.file_id,
-                            s3_key=full_s3_key,
-                            error_message=dimension_error,
-                            error_code=error_code
-                        )
+                # Проверяем размеры изображения для train операций
+                width, height = 0, 0
+                is_valid, dimension_error, width, height = self._validate_image_dimensions(response.content)
+                if not is_valid:
+                    # Определяем тип ошибки по сообщению
+                    if "Corrupted or invalid image file" in dimension_error:
+                        error_code = "CORRUPTED_FILE"
+                    else:
+                        error_code = "IMAGE_TOO_SMALL"
                     
-                    logger.debug(f"Train image {photo.file_id} passed dimension validation: {width}x{height}")
-                else:
-                    # Для inference операций получаем размеры без валидации (для метаданных)
-                    try:
-                        with Image.open(BytesIO(response.content)) as img:
-                            width, height = img.size
-                        logger.debug(f"Inference image {photo.file_id} dimensions: {width}x{height} (no validation)")
-                    except Exception as e:
-                        logger.warning(f"Could not read dimensions for inference image {photo.file_id}: {e}")
-                        width, height = 0, 0
+                    logger.warning(f"Image validation failed for train photo {photo.file_id}: {dimension_error}")
+                    return FileUploadError(
+                        file_id=photo.file_id,
+                        s3_key=full_s3_key,
+                        error_message=dimension_error,
+                        error_code=error_code
+                    )
+                
+                logger.debug(f"Train image {photo.file_id} passed dimension validation: {width}x{height}")
                 
                 # Формируем метаданные
                 metadata = {
@@ -431,8 +361,8 @@ class PhotoDownloader:
                     'image_height': str(height)
                 }
                 
-                # Добавляем batch_id только для batch запросов
-                if hasattr(request, 'batch_id') and request.batch_id:
+                # Добавляем batch_id для batch запросов
+                if request.batch_id:
                     metadata['batch_id'] = str(request.batch_id)
                 
                 # Загружаем в S3
@@ -486,14 +416,10 @@ class PhotoDownloader:
                 error_code="UNEXPECTED_ERROR"
             )
     
-    def _build_s3_path(self, request: Union[PhotoUploadRequest, InferencePhotoRequest], s3_key: str) -> str:
+    def _build_s3_path(self, request: PhotoUploadRequest, s3_key: str) -> str:
         """Формирование полного пути в S3"""
-        if request.header == "train":
-            # Для тренировки: bot_id->user_id->avatar_id
-            return f"{request.bot_id}/{request.user_id}/{request.avatar_id}/{s3_key}"
-        else:
-            # Для inference: uploads/inf/bot_id/user_id/avatar_id (без batch_id для одиночных фото)
-            return f"uploads/{request.header}/{request.bot_id}/{request.user_id}/{request.avatar_id}/{s3_key}"
+        # Для тренировки: bot_id->user_id->avatar_id
+        return f"{request.bot_id}/{request.user_id}/{request.avatar_id}/{s3_key}"
 
 
 # Глобальный экземпляр сервиса

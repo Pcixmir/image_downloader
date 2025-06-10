@@ -11,10 +11,7 @@ from app.schemas.schemas import (
     PhotoUploadRequest, 
     PhotoUploadResult, 
     PhotoUploadError,
-    InferencePhotoRequest,
-    InferencePhotoResult,
-    InferenceRequest,
-    LegacyPhotoFile
+    InferenceRequest
 )
 from app.services.photo_downloader import photo_downloader
 
@@ -57,21 +54,10 @@ def map_error_code_to_reason(error_code: str) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastStream):
-    """Управление жизненным циклом приложения"""
-    # Startup
-    logger.info("Photo Downloader Service starting up...")
-    
-    # Проверяем подключение к S3
-    from app.services.s3_service import s3_service
-    if not s3_service.check_bucket_exists():
-        logger.warning(f"S3 bucket '{settings.s3_bucket_name}' does not exist or is not accessible")
-    else:
-        logger.info(f"S3 bucket '{settings.s3_bucket_name}' is accessible")
-    
+    """Жизненный цикл приложения"""
+    logger.info("Starting Image Downloader service...")
     yield
-    
-    # Shutdown
-    logger.info("Photo Downloader Service shutting down...")
+    logger.info("Shutting down Image Downloader service...")
 
 
 app = FastStream(broker, lifespan=lifespan)
@@ -89,32 +75,11 @@ async def handle_batch_training_photos(
     """
     data = request.data
     logger.info(f"Received training batch upload request: avatar_id={data.avatar_id}, "
-               f"avatar_id={data.avatar_id}, batch_size={len(data.report)}")
+               f"batch_size={len(data.report)}")
     
     try:
-        # Конвертируем новый формат в старый для совместимости с photo_downloader
-        
-        # Создаем legacy request для photo_downloader
-        legacy_photos = []
-        for report_item in data.report:
-            legacy_photo = LegacyPhotoFile(
-                file_id=report_item.file_id,
-                s3_key="",  # Будет сгенерирован автоматически
-            )
-            legacy_photos.append(legacy_photo)
-        
-        # Создаем legacy request (временно для совместимости)
-        legacy_request = type('LegacyRequest', (), {
-            'header': 'train',
-            'photos': legacy_photos,
-            'bot_id': data.bot_id,
-            'user_id': data.user_id,
-            'avatar_id': str(data.avatar_id),
-            'batch_id': str(data.batch_id)
-        })()
-        
-        # Обрабатываем фотографии
-        result = await photo_downloader.process_photos(legacy_request)
+        # Обрабатываем фотографии напрямую
+        result = await photo_downloader.process_photos(request)
         
         # Конвертируем результат в новый формат
         if isinstance(result, PhotoUploadError):
@@ -133,7 +98,6 @@ async def handle_batch_training_photos(
             
             response_payload = {
                 "data": {
-                    "avatar_id": data.avatar_id,
                     "user_id": data.user_id,
                     "bot_id": data.bot_id,
                     "batch_id": data.batch_id,
@@ -190,7 +154,6 @@ async def handle_batch_training_photos(
             
             response_payload = {
                 "data": {
-                    "avatar_id": data.avatar_id,
                     "user_id": data.user_id,
                     "bot_id": data.bot_id,
                     "batch_id": data.batch_id,
@@ -226,7 +189,6 @@ async def handle_batch_training_photos(
         
         response_payload = {
             "data": {
-                "avatar_id": data.avatar_id,
                 "user_id": data.user_id,
                 "bot_id": data.bot_id,
                 "batch_id": data.batch_id,
@@ -306,46 +268,6 @@ async def handle_inference_error(
             "payload": response_payload,
             "headers": response_headers
         }, "ms.inference.prod")
-
-
-@broker.subscriber("photo_upload_inf")
-async def handle_inference_photo(
-    request: InferencePhotoRequest,
-) -> None:
-    """
-    Обработчик для inference одного фото (legacy - для совместимости)
-    
-    Args:
-        request: Запрос на inference одного фото (legacy формат)
-    """
-    logger.info(f"Received legacy inference photo upload request: avatar_id={request.avatar_id}, file_id={request.photo.file_id}")
-    
-    try:
-        # Обрабатываем фотографию
-        result = await photo_downloader.process_photos(request)
-        
-        if isinstance(result, PhotoUploadError):
-            logger.error(f"Inference photo upload failed for avatar_id {request.avatar_id}: {result.error}")
-            await broker.publish(result, "photo_upload_error")
-        else:
-            logger.info(f"Inference photo upload successful for avatar_id {request.avatar_id} "
-                       f"in {result.processing_time:.2f}s")
-            await broker.publish(result, "inference_result")
-            
-    except Exception as e:
-        logger.error(f"Critical error processing inference photo for avatar_id {request.avatar_id}: {e}")
-        
-        error_result = PhotoUploadError(
-            header="inf",
-            bot_id=request.bot_id,
-            user_id=request.user_id,
-            avatar_id=request.avatar_id,
-            error=str(e),
-            error_code="INFERENCE_PROCESSING_ERROR",
-            failed_files=[request.photo.file_id]
-        )
-        
-        await broker.publish(error_result, "photo_upload_error")
 
 
 if __name__ == "__main__":
