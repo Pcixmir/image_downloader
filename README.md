@@ -47,7 +47,7 @@ Photo Downloader Service - это микросервис, который:
 - **Train операции**: Batch обработка до 100 фотографий параллельно
 - **Inference операции**: Быстрая загрузка одиночных фотографий
 - **Параллельная обработка**: До 5 файлов одновременно для batch (настраивается)
-- **Валидация изображений**: Проверка минимальных размеров (450x450px) только для train операций
+
 - **Автогенерация S3 ключей**: Если `s3_key` пустой, генерируется уникальный ключ на основе `user_id`, `file_id` и временной метки
 - **Детальная статистика**: Индивидуальная информация о каждом файле
 - **Обработка ошибок**: Индивидуальные ошибки для каждого файла
@@ -150,9 +150,8 @@ make compose-up
 | `S3_SECRET_ACCESS_KEY` | S3 Secret Key | - |
 | `S3_BUCKET_NAME` | Имя S3 bucket | - |
 | `S3_REGION` | S3 регион | `us-east-1` |
-| `MAX_FILE_SIZE_MB` | Максимальный размер файла (MB) | `10` |
-| `MIN_FILE_SIZE_KB` | Минимальный размер файла (KB) | `80` |
-| `MIN_IMAGE_DIMENSION` | Минимальная сторона изображения (px) | `450` |
+
+
 | `DOWNLOAD_TIMEOUT_SECONDS` | Таймаут загрузки (сек) | `30` |
 | `MAX_CONCURRENT_DOWNLOADS` | Макс. параллельных загрузок | `5` |
 | `MAX_BATCH_SIZE` | Макс. размер batch (train) | `100` |
@@ -294,8 +293,8 @@ make compose-up
   "bot_id": 12345,
   "user_id": 67890,
   "avatar_id": "avatar_abc123",
-  "error": "File size exceeds maximum limit",
-  "error_code": "FILE_TOO_LARGE",
+  "error": "Download failed",
+  "error_code": "DOWNLOAD_HTTP_ERROR",
   "failed_files": ["BAADBAADrwADBREAAWn4gALvKoNaAg"],
   "timestamp": "2024-01-15T10:30:00Z"
 }
@@ -305,13 +304,12 @@ make compose-up
 
 | Код ошибки | Описание |
 |------------|----------|
-| `BATCH_VALIDATION_ERROR` | Ошибка валидации batch (train) |
+
 | `INFERENCE_PROCESSING_ERROR` | Ошибка обработки inference фото |
 | `TELEGRAM_API_ERROR` | Ошибка при обращении к Telegram Bot API |
 | `INVALID_TELEGRAM_URL` | Некорректный URL от Telegram API |
-| `FILE_TOO_LARGE` | Размер файла превышает лимит |
-| `FILE_TOO_SMALL` | Размер файла меньше минимального |
-| `IMAGE_TOO_SMALL` | Размеры изображения меньше минимальных (450x450px) - только для train |
+
+
 | `DOWNLOAD_HTTP_ERROR` | HTTP ошибка при скачивании |
 | `DOWNLOAD_TIMEOUT` | Таймаут при скачивании |
 | `S3_UPLOAD_ERROR` | Ошибка загрузки в S3 |

@@ -25,12 +25,11 @@ class PhotoDownloader:
     """Сервис для загрузки фотографий в S3: batch для train"""
     
     def __init__(self):
-        self.max_file_size = settings.max_file_size_mb * 1024 * 1024  # Конвертируем в байты
-        self.min_file_size = settings.min_file_size_kb * 1024  # Конвертируем в байты
+
         self.timeout = settings.download_timeout_seconds
         self.max_concurrent_downloads = getattr(settings, 'max_concurrent_downloads', 5)
         self.max_batch_size = getattr(settings, 'max_batch_size', 100)
-        self.min_image_dimension = settings.min_image_dimension  # Минимальная сторона изображения в пикселях
+
         
         # Глобальный семафор для ограничения параллельных загрузок
         self.semaphore = asyncio.Semaphore(self.max_concurrent_downloads)
@@ -103,34 +102,26 @@ class PhotoDownloader:
         except Exception:
             return False
     
-    def _validate_image_dimensions(self, image_content: bytes) -> Tuple[bool, str, int, int]:
+    def _get_image_dimensions(self, image_content: bytes) -> Tuple[int, int]:
         """
-        Проверка размеров изображения
+        Получение размеров изображения без валидации
         
         Args:
             image_content: Содержимое изображения в байтах
             
         Returns:
-            Tuple[bool, str, int, int]: (is_valid, error_message, width, height)
+            Tuple[int, int]: (width, height)
         """
         try:
             # Открываем изображение из байтов
             with Image.open(BytesIO(image_content)) as img:
                 width, height = img.size
-                
-                # Проверяем минимальные размеры
-                if width < self.min_image_dimension or height < self.min_image_dimension:
-                    error_msg = (f"Image dimensions {width}x{height} do not meet minimum requirement "
-                               f"of {self.min_image_dimension}px for both width and height")
-                    return False, error_msg, width, height
-                
-                logger.debug(f"Image dimensions validated: {width}x{height}")
-                return True, "", width, height
+                logger.debug(f"Image dimensions: {width}x{height}")
+                return width, height
                 
         except Exception as e:
-            error_msg = f"Corrupted or invalid image file: {str(e)}"
-            logger.error(error_msg)
-            return False, error_msg, 0, 0
+            logger.error(f"Failed to get image dimensions: {str(e)}")
+            return 0, 0
     
     def _generate_error_s3_key(self, photo: PhotoFile, request: PhotoUploadRequest) -> str:
         """Генерация s3_key для ошибок (вынесено в отдельный метод для избежания дублирования)"""
@@ -299,24 +290,8 @@ class PhotoDownloader:
                 response = await client.get(photo_url)
                 response.raise_for_status()
                 
-                # Проверяем размер файла
+                # Получаем размер файла
                 content_length = len(response.content)
-                if content_length > self.max_file_size:
-                    return FileUploadError(
-                        file_id=photo.file_id,
-                        s3_key=full_s3_key,
-                        error_message=f"File size {content_length} exceeds maximum {self.max_file_size}",
-                        error_code="FILE_TOO_LARGE"
-                    )
-                
-                # Проверяем минимальный размер файла
-                if content_length < self.min_file_size:
-                    return FileUploadError(
-                        file_id=photo.file_id,
-                        s3_key=full_s3_key,
-                        error_message=f"File size {content_length} is below minimum {self.min_file_size}",
-                        error_code="FILE_TOO_SMALL"
-                    )
                 
                 # Определяем и валидируем content type
                 content_type = response.headers.get('content-type', 'image/jpeg')
@@ -329,25 +304,8 @@ class PhotoDownloader:
                         error_code="UNSUPPORTED_FORMAT"
                     )
                 
-                # Проверяем размеры изображения для train операций
-                width, height = 0, 0
-                is_valid, dimension_error, width, height = self._validate_image_dimensions(response.content)
-                if not is_valid:
-                    # Определяем тип ошибки по сообщению
-                    if "Corrupted or invalid image file" in dimension_error:
-                        error_code = "CORRUPTED_FILE"
-                    else:
-                        error_code = "IMAGE_TOO_SMALL"
-                    
-                    logger.warning(f"Image validation failed for train photo {photo.file_id}: {dimension_error}")
-                    return FileUploadError(
-                        file_id=photo.file_id,
-                        s3_key=full_s3_key,
-                        error_message=dimension_error,
-                        error_code=error_code
-                    )
-                
-                logger.debug(f"Train image {photo.file_id} passed dimension validation: {width}x{height}")
+                # Получаем размеры изображения
+                width, height = self._get_image_dimensions(response.content)
                 
                 # Формируем метаданные
                 metadata = {

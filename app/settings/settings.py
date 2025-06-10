@@ -19,10 +19,8 @@ class Settings(BaseSettings):
     s3_bucket_name: str = Field(description="S3 bucket name")
     s3_region: str = Field(default="us-east-1", description="S3 region")
     
-    # Photo Processing
-    max_file_size_mb: int = Field(default=10, description="Maximum file size in MB")
-    min_file_size_kb: int = Field(default=80, description="Minimum file size in KB")
-    min_image_dimension: int = Field(default=450, description="Minimum image dimension in pixels")
+
+
     download_timeout_seconds: int = Field(default=30, description="Download timeout in seconds")
     
     # Batch Processing

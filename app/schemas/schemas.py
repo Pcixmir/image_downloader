@@ -3,6 +3,12 @@ from typing import Optional, Literal, List, Dict, Any, Tuple
 from datetime import datetime
 
 
+class PhotoFile(BaseModel):
+    """Файл фотографии для обработки"""
+    file_id: str = Field(description="ID файла в Telegram или URL")
+    s3_key: str = Field(default="", description="Ключ для S3 (опционально, генерируется автоматически если пустой)")
+
+
 class BoundingBox(BaseModel):
     """Координаты ограничивающего прямоугольника"""
     TL: Tuple[int, int] = Field(description="Top Left - верхний левый угол")
@@ -21,15 +27,7 @@ class PhotoProperties(BaseModel):
     file_size: int = Field(description="Размер файла в байтах")
     s3_key: str = Field(description="Ключ файла в S3")
     
-    @field_validator('width', 'height')
-    @classmethod
-    def validate_min_dimension(cls, v, info):
-        """Проверка минимального размера стороны фото"""
-        min_dimension = 450
-        if v < min_dimension:
-            field_name = info.field_name
-            raise ValueError(f'{field_name} must be at least {min_dimension} pixels, got {v}')
-        return v
+
 
 
 class ReportItem(BaseModel):

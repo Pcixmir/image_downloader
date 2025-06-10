@@ -35,18 +35,17 @@ def map_error_code_to_reason(error_code: str) -> str:
     error_mapping = {
         "TELEGRAM_API_ERROR": "telegram_api_error",
         "INVALID_TELEGRAM_URL": "invalid_url",
-        "FILE_TOO_LARGE": "file_too_large", 
-        "FILE_TOO_SMALL": "file_too_small",
-        "IMAGE_TOO_SMALL": "image_too_small",
+
+
         "DOWNLOAD_HTTP_ERROR": "download_failed",
         "DOWNLOAD_TIMEOUT": "download_timeout",
         "UNEXPECTED_ERROR": "processing_error",
         "INTERNAL_ERROR": "internal_error",
         "BATCH_PROCESSING_ERROR": "batch_error",
         "INFERENCE_PROCESSING_ERROR": "inference_error",
-        "DUPLICATE_FILE": "duplicate",  # Для будущей обработки дубликатов
+
         "UNSUPPORTED_FORMAT": "unsupported_format",  # Для неподдерживаемых форматов
-        "CORRUPTED_FILE": "corrupted_file"  # Для поврежденных файлов
+
     }
     
     return error_mapping.get(error_code, "general")
